@@ -141,7 +141,7 @@ def convert_tool_response_to_message(
     json_mode_content_str: Final[str | None] = tool_calls[0]["function"].get("arguments")
     try:
         if json_mode_content_str is not None:
-            args: Final = _JSON_VALUE.validate_python(json.loads(json_mode_content_str))
+            args: Final = json.loads(json_mode_content_str)
             if isinstance(args, dict) and (values := args.get("values")) is not None:
                 _message = Message(content=json.dumps(values))
                 return _message
@@ -171,8 +171,6 @@ class ResponseFormatSchema:
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, JsonValue])
-_JSON_VALUE: Final = TypeAdapter(JsonValue)
-_ANY_JSON: Final = TypeAdapter(object)
 _NAMES: Final = TypeAdapter(frozenset[str])
 
 
@@ -226,7 +224,7 @@ def _json_object_or_encoded_object(value: JsonValue) -> Mapping[str, JsonValue] 
     if not isinstance(value, str):
         return as_json_object(value)
     try:
-        return as_json_object(_ANY_JSON.validate_python(json.loads(value)))
+        return as_json_object(json.loads(value))
     except (json.JSONDecodeError, RecursionError):
         return None
 
