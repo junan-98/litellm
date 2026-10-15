@@ -7,9 +7,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Generic, Literal, Protocol, TypeVar
+from typing import Final, Generic, Literal, Protocol, TypeAlias, TypeVar
 
-from typing_extensions import assert_never
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -73,6 +74,27 @@ from litellm.repositories.verification_token_repository import (
 from litellm.types.services import ServiceTypes
 
 _RowT = TypeVar("_RowT")
+_WindowBudgetLimits: TypeAlias = str | bytes | bytearray | list[dict[str, object]]
+
+
+@with_config(ConfigDict(arbitrary_types_allowed=True, extra="allow", strict=True))
+class _KeyWindowPageRow(TypedDict):
+    token: ReadOnly[str]
+    budget_limits: ReadOnly[_WindowBudgetLimits]
+
+
+@with_config(ConfigDict(arbitrary_types_allowed=True, extra="allow", strict=True))
+class _TeamWindowPageRow(TypedDict):
+    team_id: ReadOnly[str]
+    budget_limits: ReadOnly[_WindowBudgetLimits]
+
+
+_KEY_WINDOW_PAGE_ROWS: Final[TypeAdapter[list[_KeyWindowPageRow]]] = TypeAdapter(list[_KeyWindowPageRow])
+_TEAM_WINDOW_PAGE_ROWS: Final[TypeAdapter[list[_TeamWindowPageRow]]] = TypeAdapter(list[_TeamWindowPageRow])
+_WINDOW_PAGE_ROW_ID: Final[TypeAdapter[str]] = TypeAdapter(str, config=ConfigDict(strict=True))
+_BUDGET_WINDOWS: Final[TypeAdapter[list[dict[str, object]]]] = TypeAdapter(
+    list[dict[str, object]], config=ConfigDict(strict=True)
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,7 +426,7 @@ class _WindowSource:
     """A table whose rows carry their own per-window budget limits."""
 
     table: str
-    id_column: str
+    id_column: Literal["token", "team_id"]
     entity_type: Litellm_EntityType
     counter_prefix: str
     log_subject: str
@@ -1546,7 +1568,7 @@ class ResetBudgetJob:
         spend_counter_cache: DualCache,
     ) -> str | None:
         """Reset one page of windows; return the next cursor, or None when drained."""
-        rows: Final = await self._with_db_retry(
+        raw_rows: Final = await self._with_db_retry(
             lambda: db_spanned(
                 "reset_budget_windows",
                 source.table,
@@ -1554,12 +1576,19 @@ class ResetBudgetJob:
             ),
             reason=f"reset_budget_read_{source.retry_subject}_windows_failure",
         )
+        rows: Final = (
+            _KEY_WINDOW_PAGE_ROWS.validate_python(raw_rows)
+            if source.id_column == "token"
+            else _TEAM_WINDOW_PAGE_ROWS.validate_python(raw_rows)
+        )
         for row in rows:
             raw = row["budget_limits"]
             if not raw:
                 continue
-            row_id: str = row[source.id_column]
-            windows: list[dict[str, object]] = raw if isinstance(raw, list) else json.loads(raw)
+            row_id: str = _WINDOW_PAGE_ROW_ID.validate_python(row.get(source.id_column))
+            windows: list[dict[str, object]] = _BUDGET_WINDOWS.validate_python(
+                raw if isinstance(raw, list) else json.loads(raw)
+            )
             changed = False
             for window in windows:
                 counter_key = f"{source.counter_prefix}:{row_id}:window:{window['budget_duration']}"
@@ -1582,7 +1611,7 @@ class ResetBudgetJob:
 
         if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
             return None
-        return rows[-1][source.id_column]
+        return _WINDOW_PAGE_ROW_ID.validate_python(rows[-1].get(source.id_column))
 
     @staticmethod
     async def _reset_budget_common(
