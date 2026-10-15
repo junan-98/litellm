@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, TypedDict, cast
 
 import httpx
 from httpx._types import FileContent, RequestFiles
+from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly
 
 import litellm
@@ -45,20 +46,24 @@ else:
     BaseLLMException = Any
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _VeoVideo(TypedDict, total=False):
     gcsUri: ReadOnly[str]
     bytesBase64Encoded: ReadOnly[str]
     mimeType: ReadOnly[str]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _VeoOperationResponse(TypedDict, total=False):
     videos: ReadOnly[Sequence[_VeoVideo]]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _VeoOperationMetadata(TypedDict, total=False):
     createTime: ReadOnly[str]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _VeoOperation(TypedDict, total=False):
     name: ReadOnly[str]
     done: ReadOnly[bool]
@@ -66,9 +71,12 @@ class _VeoOperation(TypedDict, total=False):
     response: ReadOnly[_VeoOperationResponse]
 
 
+_VEO_OPERATION: Final = TypeAdapter(_VeoOperation)
+_VEO_OPERATION_RESPONSE: Final = TypeAdapter(_VeoOperationResponse)
+
+
 def _parse_veo_operation(raw_response: httpx.Response) -> _VeoOperation:
-    operation: Final[_VeoOperation] = raw_response.json()
-    return operation
+    return _VEO_OPERATION.validate_python(raw_response.json())
 
 
 def veo_video_count_from_parameters(parameters: Mapping[str, object]) -> int | None:
@@ -730,7 +738,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         headers: dict,
         video_file: FileContent | None = None,
         extra_body: dict[str, object] | None = None,
-        prefetched_source_data: dict[str, Any] | None = None,
+        prefetched_source_data: Mapping[str, object] | None = None,
     ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
         """
         Build a predictLongRunning edit request from the pre-fetched source video.
@@ -747,7 +755,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         if not prefetched_source_data.get("done", False):
             raise ValueError("Source video generation is not complete yet. Check the video status before editing.")
 
-        source_response: Final[_VeoOperationResponse] = prefetched_source_data.get("response", {})
+        source_response: Final = _VEO_OPERATION_RESPONSE.validate_python(prefetched_source_data.get("response", {}))
         videos: Final = source_response.get("videos", [])
         if not videos:
             raise ValueError("No videos found in the completed operation. Cannot edit.")
