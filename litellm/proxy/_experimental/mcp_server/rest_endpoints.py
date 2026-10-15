@@ -12,7 +12,7 @@ import anyio
 import httpx
 import httpx2
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from pydantic import ValidationError
 from starlette.datastructures import Headers
 from typing_extensions import ReadOnly
 
@@ -75,15 +75,8 @@ from litellm.types.mcp import MCPAuth
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 
 
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _MCPToolCallRequest(TypedDict, total=False):
-    name: ReadOnly[str | None]
-    server_id: ReadOnly[str | None]
-    arguments: ReadOnly[Mapping[str, Any] | None]
-    metadata: ReadOnly[Mapping[str, object] | None]
-
-
-_MCP_TOOL_CALL_REQUEST_ADAPTER: Final[TypeAdapter[_MCPToolCallRequest]] = TypeAdapter(_MCPToolCallRequest)
+class _MCPModelMetadata(TypedDict):
+    model_group: ReadOnly[str]
 
 
 def _stamp_mcp_tool_metadata(logging_obj: "LiteLLMLoggingObj | None", server_id: str, tool_name: str) -> None:
@@ -1245,13 +1238,10 @@ if MCP_AVAILABLE:
         reject_disallowed_mcp_client(request.headers, user_api_key_dict)
         try:
             user_api_key_dict = await acting_user_auth(user_api_key_dict)
-            validated_data: Final[_MCPToolCallRequest] = _MCP_TOOL_CALL_REQUEST_ADAPTER.validate_python(
-                await request.json()
-            )
-            data: Final = dict(validated_data)
+            data = await request.json()
 
-            tool_name: Final[str | None] = validated_data.get("name")
-            tool_arguments: Final = validated_data.get("arguments") or {}
+            tool_name: Final[str | None] = data.get("name")
+            tool_arguments: Final[dict[str, object]] = data.get("arguments") or {}
 
             from litellm.proxy._experimental.mcp_server.tool_search import VIRTUAL_TOOL_NAMES
 
@@ -1259,7 +1249,7 @@ if MCP_AVAILABLE:
                 return await _handle_virtual_mcp_tool(request, data, tool_name, user_api_key_dict)
 
             # Validate required parameters early
-            server_id: Final[str | None] = validated_data.get("server_id")
+            server_id: Final[str | None] = data.get("server_id")
             if not server_id:
                 raise HTTPException(
                     status_code=400,
@@ -1279,15 +1269,18 @@ if MCP_AVAILABLE:
                 )
 
             data["model"] = f"MCP: {tool_name}"
-            model_metadata: Final = {
-                **(validated_data.get("metadata") or MappingProxyType({})),
+            model_metadata: Final[_MCPModelMetadata] = {
+                **(data.get("metadata") or MappingProxyType({})),
                 "model_group": f"MCP: {tool_name}",
             }
             data["metadata"] = model_metadata
             proxy_base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
             _request_start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the tool start time below
             try:
-                pre_call_result: Final = await proxy_base_llm_response_processor.common_processing_pre_call_logic(
+                (
+                    data,
+                    logging_obj,
+                ) = await proxy_base_llm_response_processor.common_processing_pre_call_logic(
                     request=request,
                     user_api_key_dict=user_api_key_dict,
                     proxy_config=proxy_config,
@@ -1296,7 +1289,6 @@ if MCP_AVAILABLE:
                     general_settings=general_settings,
                     skip_guardrails=True,
                 )
-                processed_data, logging_obj = pre_call_result
 
                 # Extract MCP auth headers from request and add to data dict
                 (
@@ -1306,15 +1298,15 @@ if MCP_AVAILABLE:
                     caller_oauth2_headers_from_request,
                 ) = _extract_mcp_headers_from_request(request, user_api_key_dict)
                 if mcp_auth_header:
-                    processed_data["mcp_auth_header"] = mcp_auth_header
+                    data["mcp_auth_header"] = mcp_auth_header
                 if mcp_server_auth_headers:
-                    processed_data["mcp_server_auth_headers"] = mcp_server_auth_headers
-                processed_data["raw_headers"] = raw_headers_from_request
+                    data["mcp_server_auth_headers"] = mcp_server_auth_headers
+                data["raw_headers"] = raw_headers_from_request
 
                 # Extract user_api_key_auth from metadata and add to top level
                 # call_mcp_tool expects user_api_key_auth as a top-level parameter
-                if "metadata" in processed_data and "user_api_key_auth" in processed_data["metadata"]:
-                    processed_data["user_api_key_auth"] = processed_data["metadata"]["user_api_key_auth"]
+                if "metadata" in data and "user_api_key_auth" in data["metadata"]:
+                    data["user_api_key_auth"] = data["metadata"]["user_api_key_auth"]
 
                 _stamp_mcp_tool_metadata(logging_obj, server_id, tool_name)
 
@@ -1342,17 +1334,17 @@ if MCP_AVAILABLE:
                 _tool_start_time: Final = datetime.now()
                 executed: Final = await execute_mcp_tool(
                     name=tool_name,
-                    arguments=dict(tool_arguments),
+                    arguments=tool_arguments,
                     allowed_mcp_servers=allowed_mcp_servers,
                     start_time=_tool_start_time,
-                    user_api_key_auth=processed_data.get("user_api_key_auth"),
-                    mcp_auth_header=processed_data.get("mcp_auth_header"),
-                    mcp_server_auth_headers=processed_data.get("mcp_server_auth_headers"),
+                    user_api_key_auth=data.get("user_api_key_auth"),
+                    mcp_auth_header=data.get("mcp_auth_header"),
+                    mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
                     oauth2_headers=user_oauth_extra_headers or caller_oauth2_headers,
-                    raw_headers=processed_data.get("raw_headers"),
+                    raw_headers=data.get("raw_headers"),
                     client_ip=IPAddressUtils.get_mcp_client_ip(request),
-                    litellm_logging_obj=processed_data.get("litellm_logging_obj"),
-                    guardrail_context=MCPRequestContext.resolve_guardrail_context(processed_data),
+                    litellm_logging_obj=data.get("litellm_logging_obj"),
+                    guardrail_context=MCPRequestContext.resolve_guardrail_context(data),
                     requested_server_id=canonical_server_id,
                     incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(
                         request.headers, user_api_key_dict
@@ -1371,7 +1363,7 @@ if MCP_AVAILABLE:
                 _tool_start_time,
                 datetime.now(),
                 user_api_key_auth=user_api_key_dict,
-                request_data=processed_data,
+                request_data=data,
             )
         except MCPMissingUserEnvVarsError as e:
             verbose_logger.info(
