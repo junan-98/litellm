@@ -30,7 +30,7 @@ from litellm.constants import (
     PRESIDIO_ANALYZE_CHUNK_CONCURRENCY,
     PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1373,28 +1373,28 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
 
             # 2. Process tool calls
-            tool_calls = getattr(message, "tool_calls", None)
+            tool_calls = message.tool_calls
             if tool_calls:
-                tool_call: object
                 for tool_call in tool_calls:
-                    function = getattr(tool_call, "function", None)
-                    if function and hasattr(function, "arguments"):
-                        args = function.arguments
-                        if isinstance(args, str):
-                            if mode == "unmask":
-                                function.arguments = self._unmask_pii_text(args, pii_tokens)
-                            elif mode == "mask":
-                                function.arguments = await self.check_pii(
-                                    text=args,
-                                    output_parse_pii=False,
-                                    presidio_config=presidio_config,
-                                    request_data=request_data,
-                                )
+                    if not isinstance(tool_call, ChatCompletionMessageToolCall):
+                        continue
+                    function = tool_call.function
+                    args: Final[object] = function.arguments
+                    if isinstance(args, str):
+                        if mode == "unmask":
+                            function.arguments = self._unmask_pii_text(args, pii_tokens)
+                        elif mode == "mask":
+                            function.arguments = await self.check_pii(
+                                text=args,
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=request_data,
+                            )
 
             # 3. Process legacy function calls
-            function_call = getattr(message, "function_call", None)
-            if function_call and hasattr(function_call, "arguments"):
-                args = function_call.arguments
+            function_call = message.function_call
+            if function_call is not None:
+                args: Final[object] = function_call.arguments
                 if isinstance(args, str):
                     if mode == "unmask":
                         function_call.arguments = self._unmask_pii_text(args, pii_tokens)
