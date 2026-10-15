@@ -6,8 +6,8 @@ It uses the field targeting configuration from litellm_logging_obj
 to extract specific fields for guardrail processing.
 """
 
-from collections.abc import Awaitable, Callable, Mapping
-from typing import TYPE_CHECKING, Final, Optional, Protocol
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
@@ -20,41 +20,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-
-
-class _ProviderHandler(Protocol):
-    async def process_input_messages(
-        self,
-        data: Mapping[str, object],
-        guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> object: ...
-
-    async def process_output_response(
-        self,
-        response: object,
-        guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: Mapping[str, object] | None = None,
-    ) -> object: ...
-
-    @staticmethod
-    def is_event_stream_content_type(content_type: str) -> bool: ...
-
-    @staticmethod
-    def event_stream_media_type() -> str: ...
-
-    @staticmethod
-    def event_stream_endpoint_is_de_anonymizable(endpoint: str) -> bool: ...
-
-    @staticmethod
-    async def de_anonymize_event_stream(
-        body_bytes: bytes,
-        proxy_logging_obj: "ProxyLogging",
-        user_api_key_dict: "UserAPIKeyAuth",
-        data: Mapping[str, object],
-    ) -> bytes: ...
 
 
 class PassThroughEndpointHandler(BaseTranslation):
@@ -231,10 +196,10 @@ class PassThroughEndpointHandler(BaseTranslation):
         return response
 
 
-_PROVIDER_HANDLERS: dict[str, type[_ProviderHandler]] = {}
+_PROVIDER_HANDLERS: dict[str, type[BaseTranslation]] = {}
 
 
-def _get_provider_handlers() -> dict[str, type[_ProviderHandler]]:
+def _get_provider_handlers() -> dict[str, type[BaseTranslation]]:
     global _PROVIDER_HANDLERS
     if not _PROVIDER_HANDLERS:
         from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
@@ -258,7 +223,7 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> object:
+    ) -> Any:
         provider: Final = data.get("custom_llm_provider")
         handler_cls: Final = _get_provider_handlers().get(provider or "")
         if handler_cls is None:
@@ -300,30 +265,31 @@ class LlmPassthroughRouteHandler(BaseTranslation):
     @staticmethod
     def is_event_stream_response(provider: str | None, content_type: str) -> bool:
         handler_cls: Final = _get_provider_handlers().get(provider or "")
-        if handler_cls is None:
+        detector: Final = getattr(handler_cls, "is_event_stream_content_type", None)
+        if detector is None:
             return False
-        return handler_cls.is_event_stream_content_type(content_type)
+        return detector(content_type)
 
     @staticmethod
     def event_stream_media_type(provider: str | None) -> str | None:
         handler_cls: Final = _get_provider_handlers().get(provider or "")
-        if handler_cls is None:
+        getter: Final = getattr(handler_cls, "event_stream_media_type", None)
+        if getter is None:
             return None
-        return handler_cls.event_stream_media_type()
+        return getter()
 
     @staticmethod
-    def _resolve_event_stream_de_anonymizer(
-        provider: str | None,
-    ) -> Callable[..., Awaitable[bytes]] | None:
+    def _resolve_event_stream_de_anonymizer(provider: str | None):
         handler_cls: Final = _get_provider_handlers().get(provider or "")
-        return handler_cls.de_anonymize_event_stream if handler_cls is not None else None
+        return getattr(handler_cls, "de_anonymize_event_stream", None)
 
     @staticmethod
     def supports_event_stream_de_anonymization(provider: str | None, endpoint: str | None) -> bool:
         handler_cls: Final = _get_provider_handlers().get(provider or "")
-        if handler_cls is None:
+        endpoint_check: Final = getattr(handler_cls, "event_stream_endpoint_is_de_anonymizable", None)
+        if endpoint_check is None:
             return False
-        return handler_cls.event_stream_endpoint_is_de_anonymizable(endpoint or "")
+        return endpoint_check(endpoint or "")
 
     @staticmethod
     async def de_anonymize_event_stream(
