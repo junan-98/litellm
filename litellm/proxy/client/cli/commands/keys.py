@@ -7,6 +7,7 @@ from typing import Any, Final, Literal, Protocol
 import click
 import requests
 import rich
+from pydantic import TypeAdapter
 from rich.table import Table
 from typing_extensions import ReadOnly, TypedDict
 
@@ -25,12 +26,16 @@ class _CliContextView(Protocol):
     def obj(self) -> _CliContext: ...
 
 
-class _KeyRowsView(TypedDict):
-    rows: ReadOnly[Sequence[Mapping[str, object]]]
+class _KeyListResponse(TypedDict, total=False):
+    keys: ReadOnly[Sequence[Mapping[str, object]]]
+    total_count: ReadOnly[int]
 
 
 class _JsonBodyView(TypedDict):
     body: ReadOnly[object]
+
+
+_KEY_LIST_RESPONSE: Final = TypeAdapter(_KeyListResponse)
 
 
 def _cli_context(view: _CliContextView) -> _CliContext:
@@ -97,16 +102,16 @@ def list(
     if output_format == "json":
         rich.print_json(data=response)
     else:
-        listed: Final[_KeyRowsView] = {"rows": response.get("keys", [])}
-        rich.print(f"Showing {len(listed['rows'])} keys out of {response.get('total_count', 0)}")
+        listed: Final = _KEY_LIST_RESPONSE.validate_python(response, strict=True, extra="allow")
+        rows: Final = listed.get("keys", [])
+        rich.print(f"Showing {len(rows)} keys out of {listed.get('total_count', 0)}")
         table: Final = Table(title="API Keys")
         table.add_column("Key Hash", style="cyan")
         table.add_column("Alias", style="green")
         table.add_column("User ID", style="magenta")
         table.add_column("Team ID", style="yellow")
         table.add_column("Spend", style="red")
-        key_rows: Final[_KeyRowsView] = {"rows": response.get("keys", [])}
-        for key in key_rows["rows"]:
+        for key in rows:
             table.add_row(
                 str(key.get("token", "")),
                 str(key.get("key_alias", "")),
@@ -231,9 +236,9 @@ def _fetch_all_keys_with_pagination(
         source_response = source_client.list(return_full_object=True, page=page, size=page_size)
         # source_client.list() returns Dict[str, Any] when return_request is False (default)
         assert isinstance(source_response, dict), "Expected dict response from list API"
-        page_keys: Sequence[Mapping[str, object]] = source_response.get("keys", [])
-
-        if not page_keys:
+        if not (
+            page_keys := _KEY_LIST_RESPONSE.validate_python(source_response, strict=True, extra="allow").get("keys", [])
+        ):
             break
 
         source_keys.extend(page_keys)
