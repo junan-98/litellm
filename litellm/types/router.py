@@ -1289,9 +1289,9 @@ class PreRoutingStrategy(Protocol):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict[str, object],
-        messages: list[dict[str, object]] | None = None,
-        input: "str | list[object] | None" = None,
+        request_kwargs: dict[str, Any],
+        messages: list[dict[str, Any]] | None = None,
+        input: "str | list[Any] | None" = None,
         specific_deployment: bool | None = False,
     ) -> "PreRoutingHookResponse | None": ...
 

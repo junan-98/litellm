@@ -550,7 +550,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         limit: int | None = None,
         after: str | None = None,
         additional_filters: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+    ) -> dict[str, Any]:
         """
         List resources created by a user.
 
