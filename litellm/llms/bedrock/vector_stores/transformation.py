@@ -1,11 +1,9 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -13,6 +11,8 @@ from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreCon
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
+    BedrockKBContent,
+    BedrockKBResponse,
     BedrockKBRetrievalConfiguration,
     BedrockKBRetrievalQuery,
     BedrockKBUserContext,
@@ -32,28 +32,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _RetrievalContent(TypedDict, total=False):
-    text: NotRequired[ReadOnly[str | None]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _RetrievalItem(TypedDict, total=False):
-    content: NotRequired[ReadOnly[_RetrievalContent | None]]
-    metadata: NotRequired[ReadOnly[dict[str, object] | None]]
-    score: NotRequired[ReadOnly[int | float | None]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _BedrockKBRetrieveBody(TypedDict, total=False):
-    """Retrieve response; only retrievalResults is read downstream."""
-
-    retrievalResults: NotRequired[ReadOnly[Sequence[_RetrievalItem] | None]]
-
-
-_RETRIEVE_BODY: Final = TypeAdapter(_BedrockKBRetrieveBody)
 
 
 class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
@@ -353,10 +331,10 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         try:
-            response_data: Final = _RETRIEVE_BODY.validate_python(response.json())
+            response_data: Final = BedrockKBResponse(**response.json())
             results: Final[list[VectorStoreSearchResult]] = []
             for item in response_data.get("retrievalResults", []) or []:
-                content: _RetrievalContent | None = item.get("content")
+                content: BedrockKBContent | None = item.get("content")
                 text = content.get("text") if content else None
                 if text is None:
                     continue

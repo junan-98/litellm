@@ -12,9 +12,6 @@ import uuid
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
-
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -24,16 +21,6 @@ from litellm.llms.gigachat.utils import get_api_base
 from litellm.types.utils import LlmProviders
 
 from .authenticator import get_access_token, get_access_token_async
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _FileUploadResult(TypedDict, total=False):
-    """GigaChat upload response; only the id key is read."""
-
-    id: ReadOnly[str]
-
-
-_FILE_UPLOAD_RESULT: Final = TypeAdapter(_FileUploadResult)
 
 # Simple in-memory cache for file IDs
 _file_cache: Final[dict[str, str]] = {}
@@ -150,7 +137,7 @@ def upload_file_sync(
             timeout=60,
         )
         response.raise_for_status()
-        result: Final = _FILE_UPLOAD_RESULT.validate_python(response.json())
+        result: Final = response.json()
 
         file_id: Final = result.get("id")
         if file_id:
@@ -219,7 +206,7 @@ async def upload_file_async(
             timeout=60,
         )
         response.raise_for_status()
-        result: Final = _FILE_UPLOAD_RESULT.validate_python(response.json())
+        result: Final = response.json()
 
         file_id: Final = result.get("id")
         if file_id:

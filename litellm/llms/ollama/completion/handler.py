@@ -7,7 +7,6 @@ Ollama /chat/completion calls handled in llm_http_handler.py
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Protocol, TypedDict
 
-from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly
 
 import litellm
@@ -20,15 +19,11 @@ class TokenEncoder(Protocol):
     def encode(self, text: str, /) -> Sequence[int]: ...
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
 class OllamaEmbeddingResponse(TypedDict):
     """Body of an Ollama ``/api/embed`` response."""
 
-    embeddings: ReadOnly[list[list[int | float]]]
+    embeddings: ReadOnly[list[list[float]]]
     prompt_eval_count: ReadOnly[NotRequired[int]]
-
-
-_OLLAMA_EMBEDDING_RESPONSE: Final = TypeAdapter(OllamaEmbeddingResponse)
 
 
 def _prepare_ollama_embedding_payload(
@@ -56,7 +51,7 @@ def _process_ollama_embedding_response(
     encoding: TokenEncoder | None,
 ) -> EmbeddingResponse:
     output_data: Final = []
-    embeddings: Final[list[list[int | float]]] = response_json["embeddings"]
+    embeddings: Final[list[list[float]]] = response_json["embeddings"]
 
     for idx, emb in enumerate(embeddings):
         output_data.append({"object": "embedding", "index": idx, "embedding": emb})
@@ -91,7 +86,7 @@ async def ollama_aembeddings(
     model: str,
     prompts: list[str],
     model_response: EmbeddingResponse,
-    optional_params: Mapping[str, object],
+    optional_params: dict,
     logging_obj: object,
     encoding: TokenEncoder | None,
 ):
@@ -101,7 +96,7 @@ async def ollama_aembeddings(
     data: Final = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
     response: Final = await litellm.module_level_aclient.post(url=api_base, json=data)
-    response_json: Final = _OLLAMA_EMBEDDING_RESPONSE.validate_python(response.json())
+    response_json: Final[OllamaEmbeddingResponse] = response.json()
 
     return _process_ollama_embedding_response(
         response_json=response_json,
@@ -117,7 +112,7 @@ def ollama_embeddings(
     api_base: str,
     model: str,
     prompts: list[str],
-    optional_params: Mapping[str, object],
+    optional_params: dict,
     model_response: EmbeddingResponse,
     logging_obj: object,
     encoding: TokenEncoder | None = None,
@@ -128,7 +123,7 @@ def ollama_embeddings(
     data: Final = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
     response: Final = litellm.module_level_client.post(url=api_base, json=data)
-    response_json: Final = _OLLAMA_EMBEDDING_RESPONSE.validate_python(response.json())
+    response_json: Final[OllamaEmbeddingResponse] = response.json()
 
     return _process_ollama_embedding_response(
         response_json=response_json,
