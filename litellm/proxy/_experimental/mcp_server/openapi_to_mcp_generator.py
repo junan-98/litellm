@@ -13,6 +13,7 @@ from typing import Any, Final, TypedDict
 from urllib.parse import quote
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, Required
 
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
@@ -101,6 +102,16 @@ class _OpenAPIComponents(TypedDict, total=False):
     parameters: Mapping[str, _OpenAPIParameter]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
+class _OpenAPIServer(TypedDict, total=False):
+    url: ReadOnly[Required[str]]
+
+
+_OBJ_LIST: Final = TypeAdapter(list[object])
+_SERVER: Final = TypeAdapter(_OpenAPIServer)
+_STRICT_STR_DICT: Final = TypeAdapter(dict[str, object])
+
+
 # Store the base URL and headers globally
 BASE_URL: Final = ""
 HEADERS: Final[dict[str, str]] = {}
@@ -184,21 +195,22 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
             else await async_safe_get(client, filepath, max_response_bytes=max_bytes)
         )
         r.raise_for_status()
-        return r.json()
+        return _STRICT_STR_DICT.validate_python(r.json())
 
     # fallback: local file
     # Local filesystem path
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return _STRICT_STR_DICT.validate_python(json.load(f))
 
 
-def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
+def get_base_url(spec: Mapping[str, object], spec_path: str | None = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
-        server_url: Final[str] = spec["servers"][0]["url"]
+        servers: Final = _OBJ_LIST.validate_python(spec["servers"])
+        server_url: Final[str] = _SERVER.validate_python(servers[0])["url"]
 
         # If the server URL is relative (starts with /), derive base from spec_path
         if server_url.startswith("/") and spec_path:
@@ -220,8 +232,8 @@ def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
         return server_url
     # OpenAPI 2.x (Swagger)
     elif "host" in spec:
-        scheme: Final[str] = spec.get("schemes", ["https"])[0]
-        base_path: Final[str] = spec.get("basePath", "")
+        scheme: Final = _OBJ_LIST.validate_python(spec.get("schemes", ["https"]))[0]
+        base_path: Final = spec.get("basePath", "")
         return f"{scheme}://{spec['host']}{base_path}"
 
     # Fallback: derive base URL from spec_path if it's a URL
