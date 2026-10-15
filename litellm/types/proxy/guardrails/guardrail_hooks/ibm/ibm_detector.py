@@ -1,5 +1,3 @@
-from typing import Any
-
 from pydantic import Field
 from typing_extensions import TypedDict
 
@@ -15,14 +13,14 @@ class IBMDetectorRequestBodyDetectorServer(TypedDict):
     """Request body for calling IBM Detector Server directly"""
 
     contents: list[str]
-    detector_params: dict[str, Any]
+    detector_params: dict[str, object]
 
 
 class IBMDetectorRequestBodyOrchestrator(TypedDict):
     """Request body for calling IBM Detector via FMS Guardrails Orchestrator"""
 
     content: str
-    detectors: dict[str, dict[str, Any]]
+    detectors: dict[str, dict[str, object]]
 
 
 class IBMDetectorDetection(TypedDict, total=False):
@@ -34,8 +32,8 @@ class IBMDetectorDetection(TypedDict, total=False):
     detection: str
     detection_type: str
     score: float
-    evidences: list[Any]
-    metadata: dict[str, Any]
+    evidences: list[object]
+    metadata: dict[str, object]
     detector_id: str | None  # Only present in orchestrator response
 
 
@@ -57,12 +55,12 @@ class IBMDetectorResponseOrchestrator(TypedDict):
 class IBMDetectorOptionalParams(LiteLLMBaseModel):
     """Optional parameters for IBM Detector guardrail"""
 
-    detector_params: dict[str, Any] | None = Field(
+    detector_params: dict[str, object] | None = Field(
         default_factory=lambda: {},
         description="Dictionary of arguments to pass to the detector.",
     )
 
-    extra_headers: dict[str, Any] | None = Field(
+    extra_headers: dict[str, object] | None = Field(
         default_factory=lambda: {},
         description="Dictionary of extra headers to pass to the detector.",
     )
